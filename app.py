@@ -4,7 +4,6 @@ import numpy as np
 import joblib
 from tensorflow.keras.models import load_model
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
 
 # --- 1. CONFIGURATION AND LOADING ---
 
@@ -21,7 +20,7 @@ st.set_page_config(layout="wide", page_title="Stock Price Prediction (LSTM)")
 def load_all_files():
     """Loads model, scaler, and cleaned data from disk."""
     try:
-        model = load_model(MODEL_FILE, compile=False) # compile=False avoids potential compile warnings/errors on load
+        model = load_model(MODEL_FILE)
         scaler = joblib.load(SCALER_FILE)
         df = pd.read_csv(DATA_FILE)
         df['Date'] = pd.to_datetime(df['Date'])
@@ -32,7 +31,7 @@ def load_all_files():
 
 model, scaler, df_all = load_all_files()
 
-# --- 2. APP LAYOUT, CHECKS, AND DATE SELECTION ---
+# --- 2. APP LAYOUT AND CHECKS ---
 
 st.title("🇳🇬 NSE Stock Price Forecasting (LSTM RNN)")
 st.caption("Developed by Abdulrashid Abubakar | Modibbo Adama University, Yola")
@@ -40,8 +39,9 @@ st.caption("Developed by Abdulrashid Abubakar | Modibbo Adama University, Yola")
 if df_all.empty or model is None or scaler is None:
     st.stop()
 
-# --- SIDEBAR: ORGANIZATION SELECTION ---
+# Sidebar for selection
 organizations = df_all['Organisation'].unique()
+# Find the index of 'NSE' and explicitly cast it to a standard Python int()
 if 'NSE' in organizations:
     default_index = int(np.where(organizations == 'NSE')[0][0])
 else:
@@ -49,43 +49,21 @@ else:
     
 selected_org = st.sidebar.selectbox("Select Organisation/Ticker for Analysis:", organizations, index=default_index) 
 
-# Filter data for the selected organization
-df_org = df_all[df_all['Organisation'] == selected_org].sort_values('Date').copy()
-last_available_date = df_org['Date'].max()
-
-# --- SIDEBAR: DATE SELECTION ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("Set Prediction Date")
-
-# Calculate the first valid prediction date (the day after the last available data)
-min_date = last_available_date + pd.Timedelta(days=1)
-# Default to today's date if it's after the min_date, otherwise use min_date
-today = datetime.now().date()
-default_date = max(min_date.date(), today)
-
-
-prediction_date = st.sidebar.date_input(
-    "Select Target Prediction Date (after last close):",
-    value=default_date,
-    min_value=min_date.date(),
-    max_value=min_date.date() + timedelta(days=365*2), # Limit to 2 years ahead
-    key="prediction_date_input"
-)
-prediction_date = pd.to_datetime(prediction_date) # Convert to datetime for comparison
-
-# --- SIDEBAR: MODEL INFO ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("Model Information")
 st.sidebar.info(f"Model trained on the **NSE All Share Index** using a **{LOOKBACK_PERIOD}-day** lookback window. It is applied to the selected stock.")
 
+# Filter data for the selected organization
+df_org = df_all[df_all['Organisation'] == selected_org].sort_values('Date').copy()
+
 
 # --- 3. PREDICTION FUNCTION ---
 
-def predict_price(org_data, model, scaler, target_date):
-    """Generates the prediction for the given target date."""
+def predict_next_day(org_data, model, scaler):
+    """Generates the prediction for the next trading day."""
     
     if len(org_data) < LOOKBACK_PERIOD:
-        return None # Not enough data
+        return None, None, None # Not enough data
         
     # Use the 'Price' column for prediction
     last_prices = org_data['Price'].values[-LOOKBACK_PERIOD:].reshape(-1, 1)
@@ -102,19 +80,27 @@ def predict_price(org_data, model, scaler, target_date):
     # 4. Inverse transform to get the actual Naira price
     predicted_price = scaler.inverse_transform(scaled_prediction)[0, 0]
     
-    return predicted_price
+    # Calculate the next trading date
+    last_date = org_data['Date'].max()
+    next_date = last_date + pd.Timedelta(days=1)
+    
+    # Advance to the next weekday (simple trading day approximation)
+    while next_date.weekday() > 4: # 5=Saturday, 6=Sunday
+        next_date += pd.Timedelta(days=1)
+        
+    return predicted_price, last_date, next_date
 
 # --- 4. MAIN METRICS DISPLAY ---
 
 if not df_org.empty:
     latest_price = df_org['Price'].iloc[-1]
-    latest_date_str = last_available_date.strftime('%Y-%m-%d')
+    latest_date = df_org['Date'].iloc[-1].strftime('%Y-%m-%d')
     mean_volume = df_org['Vol.'].mean() / 1_000_000 # Convert to millions
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric(f"Latest Close Price ({latest_date_str})", f"₦{latest_price:,.2f}")
+        st.metric(f"Latest Close Price ({latest_date})", f"₦{latest_price:,.2f}")
     with col2:
         st.metric("Average Volume (Millions)", f"{mean_volume:,.2f}M")
     with col3:
@@ -126,14 +112,11 @@ else:
 # --- 5. PREDICTION SECTION ---
 st.header(f"Forecast for {selected_org}")
 
-if st.button(f"Generate Forecast for {prediction_date.strftime('%Y-%m-%d')}"):
-    
-    # NOTE: The current model predicts only the NEXT single step. 
-    # For any date other than the day after last_available_date, this is an extrapolated one-step prediction.
-    predicted_price = predict_price(df_org, model, scaler, prediction_date)
+if st.button(f"Predict Next Trading Day Price for {selected_org}"):
+    predicted_price, last_date, next_date = predict_next_day(df_org, model, scaler)
     
     if predicted_price is not None:
-        st.success(f"**Predicted Closing Price for {selected_org} on {prediction_date.strftime('%Y-%m-%d')}:**")
+        st.success(f"**Predicted Closing Price for {selected_org} on {next_date.strftime('%Y-%m-%d')}:**")
         st.balloons()
         
         # Display the main prediction
@@ -169,10 +152,5 @@ ax.legend()
 ax.grid(True, linestyle=':', alpha=0.7)
 plt.xticks(rotation=45)
 plt.tight_layout()
-
-# Add the prediction point to the chart if a prediction was just made
-if 'predicted_price' in locals() and predicted_price is not None:
-    ax.scatter(prediction_date, predicted_price, color='red', marker='*', s=200, label='Predicted Price')
-    ax.legend()
 
 st.pyplot(fig)
