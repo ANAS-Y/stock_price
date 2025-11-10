@@ -11,8 +11,8 @@ from copy import deepcopy
 # --- 1. CONFIGURATION AND LOADING ---
 
 # Define file paths
-MODEL_FILE = 'lstm_model_all_data.h5' # NOTE: Changed filename for the new model
-SCALER_FILE = 'scaler_all_data.joblib' # NOTE: Changed filename for the new scaler
+MODEL_FILE = 'lstm_model_all_data.h5' # NOTE: Must match file from Colab
+SCALER_FILE = 'scaler_all_data.joblib' # NOTE: Must match file from Colab
 DATA_FILE = 'cleaned_nigerian_stock_data.csv'
 LOOKBACK_PERIOD = 60 # Must match the training lookback period
 TRAINING_FEATURES = ['Price', 'Open', 'High', 'Low', 'Change %']
@@ -37,7 +37,6 @@ def load_all_files():
         
     try:
         # Load files now that existence is confirmed
-        # Use the NEW filenames trained on ALL data
         model = load_model(MODEL_FILE, compile=False) 
         scaler = joblib.load(SCALER_FILE)
         df = pd.read_csv(DATA_FILE)
@@ -162,21 +161,23 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
             predicted_row_unscaled = scaler.inverse_transform(mock_row_scaled)[0]
             predicted_price = predicted_row_unscaled[PRICE_INDEX]
             
+            # Ensure price cannot go negative (essential fix)
+            if predicted_price < 0:
+                 predicted_price = 0.01 # Set to minimum positive value
+            
             # 2. Store prediction
             prediction_dates.append(current_date)
             prediction_prices.append(predicted_price)
             
             # 3. Create the NEW SCALED INPUT ROW for the next recursive step
             
-            # The most stable approximation for the next input (UNSCALED) is:
-            # We use the predicted price as the anchor for the other features
-            next_input_unscaled = np.array([
-                predicted_price,                       # Price (Predicted)
-                predicted_price,                       # Open (Approx = Price)
-                predicted_price * 1.005,               # High (Approx +0.5% volatility)
-                predicted_price * 0.995,               # Low (Approx -0.5% volatility)
-                0.0                                    # Change % (Assume 0 for base prediction)
-            ]).reshape(1, -1) # Ensure this is (1, 5)
+            # --- FINAL STABILITY FIX: Use predicted price for all 5 features ---
+            # This is the most conservative and stable method for long-term recursive forecasting
+            next_input_unscaled = np.full(
+                (1, len(TRAINING_FEATURES)), 
+                predicted_price
+            )
+            # --- END FINAL STABILITY FIX ---
 
             # Scale this new input row using the multi-feature scaler
             next_input_scaled = scaler.transform(next_input_unscaled)
