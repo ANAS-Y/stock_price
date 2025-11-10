@@ -110,8 +110,7 @@ st.sidebar.info(f"Model trained on **ALL 10 Nigerian Stocks** using a **{LOOKBAC
 def predict_recursive(org_data, model, scaler, target_date, lookback):
     """
     Generates multi-step, recursive predictions up to the target_date using 
-    a multi-feature input sequence. The function now uses robust column 
-    selection and scaling.
+    a multi-feature input sequence, applying constraints for stability.
     """
     
     last_date = org_data['Date'].max()
@@ -120,21 +119,24 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
         return None, None
 
     # 1. Prepare initial sequence (multi-feature)
-    # This explicitly selects the 5 required float columns
     last_60_rows = org_data[TRAINING_FEATURES].values[-lookback:]
-    
-    # Scale the input sequence
     scaled_input_sequence = scaler.transform(last_60_rows)
-    
     current_input_sequence = deepcopy(scaled_input_sequence)
     
     prediction_dates = []
     prediction_prices = []
     current_date = last_date + pd.Timedelta(days=1)
 
-    # Get index of 'Price' feature for easy access
+    # Get index of 'Price' feature for easy access (0)
     PRICE_INDEX = TRAINING_FEATURES.index('Price')
+    
+    # Store the last actual price to constrain the prediction
+    last_actual_price = org_data['Price'].iloc[-1]
 
+    # Calculate the scaled equivalent of the price constraint
+    # We will use 5% as the MAX allowed daily change.
+    MAX_DAILY_CHANGE = 0.05
+    
     while current_date <= target_date:
         
         # Skip weekends/non-trading days (approximation)
@@ -150,20 +152,31 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
             # Recursive Step: Inverse Transform and Sequence Update
             # ----------------------------------------------------
             
+            # Determine the baseline price for constraining (previous prediction or last actual price)
+            if prediction_prices:
+                baseline_price = prediction_prices[-1]
+            else:
+                baseline_price = last_actual_price
+                
             # 1. Inverse transform the predicted price to get the actual Naira price
-            
-            # Create a mock array for the inverse transform (1 row, 5 columns)
             mock_row_scaled = np.zeros((1, len(TRAINING_FEATURES)))
-            # Place the predicted scaled price into the Price index (index 0)
             mock_row_scaled[0, PRICE_INDEX] = scaled_prediction_price[0, 0]
-            
-            # Inverse transform the mock row to get the actual unscaled values
             predicted_row_unscaled = scaler.inverse_transform(mock_row_scaled)[0]
-            predicted_price = predicted_row_unscaled[PRICE_INDEX]
+            unconstrained_price = predicted_row_unscaled[PRICE_INDEX]
             
-            # Ensure price cannot go negative (essential fix)
-            if predicted_price < 0:
-                 predicted_price = 0.01 # Set to minimum positive value
+            # --- FINAL STABILITY FIX: CONSTRAIN DAILY CHANGE ---
+            
+            # Calculate min/max price allowed (e.g., +/- 5% of the baseline price)
+            max_allowed_price = baseline_price * (1 + MAX_DAILY_CHANGE)
+            min_allowed_price = baseline_price * (1 - MAX_DAILY_CHANGE)
+            
+            # Clip the price to enforce the constraint
+            predicted_price = np.clip(unconstrained_price, min_allowed_price, max_allowed_price)
+            
+            # Ensure price cannot go negative (should be handled by clip and min_allowed, but safe to keep)
+            if predicted_price <= 0:
+                 predicted_price = 0.01 
+            # --- END FINAL STABILITY FIX ---
             
             # 2. Store prediction
             prediction_dates.append(current_date)
@@ -171,22 +184,18 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
             
             # 3. Create the NEW SCALED INPUT ROW for the next recursive step
             
-            # --- FINAL STABILITY FIX: Use predicted price for all 5 features ---
-            # This is the most conservative and stable method for long-term recursive forecasting
+            # Use the CONSTRAINED predicted price for all 5 features 
+            # (Ensures all features scale consistently and prevents runaway errors)
             next_input_unscaled = np.full(
                 (1, len(TRAINING_FEATURES)), 
                 predicted_price
             )
-            # --- END FINAL STABILITY FIX ---
 
             # Scale this new input row using the multi-feature scaler
             next_input_scaled = scaler.transform(next_input_unscaled)
             
             # 4. Update the input sequence
-            # Remove the oldest row (the first element, size 1x5)
             current_input_sequence = np.delete(current_input_sequence, 0, axis=0)
-            
-            # Append the new predicted/approximated scaled row (size 1x5) to the end
             current_input_sequence = np.append(current_input_sequence, next_input_scaled, axis=0)
 
         # Move to the next day
