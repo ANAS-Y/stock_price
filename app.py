@@ -11,8 +11,8 @@ from copy import deepcopy
 # --- 1. CONFIGURATION AND LOADING ---
 
 # Define file paths
-MODEL_FILE = 'lstm_model_nse.h5'
-SCALER_FILE = 'scaler_nse.joblib'
+MODEL_FILE = 'lstm_model_all_data.h5' # NOTE: Changed filename for the new model
+SCALER_FILE = 'scaler_all_data.joblib' # NOTE: Changed filename for the new scaler
 DATA_FILE = 'cleaned_nigerian_stock_data.csv'
 LOOKBACK_PERIOD = 60 # Must match the training lookback period
 TRAINING_FEATURES = ['Price', 'Open', 'High', 'Low', 'Change %']
@@ -37,6 +37,7 @@ def load_all_files():
         
     try:
         # Load files now that existence is confirmed
+        # Use the NEW filenames trained on ALL data
         model = load_model(MODEL_FILE, compile=False) 
         scaler = joblib.load(SCALER_FILE)
         df = pd.read_csv(DATA_FILE)
@@ -68,6 +69,7 @@ if df_all.empty or model is None or scaler is None:
 # --- SIDEBAR: ORGANIZATION SELECTION ---
 organizations = df_all['Organisation'].unique()
 if 'NSE' in organizations:
+    # Set default index to NSE, but list all organizations
     default_index = int(np.where(organizations == 'NSE')[0][0])
 else:
     default_index = 0
@@ -101,7 +103,7 @@ prediction_date = pd.to_datetime(prediction_date) # Convert to datetime for comp
 # --- SIDEBAR: MODEL INFO ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("Model Information")
-st.sidebar.info(f"Model trained on the **NSE All Share Index** using a **{LOOKBACK_PERIOD}-day** lookback window and **5 features** (Price, Open, High, Low, Change %). This model performs **recursive multi-step forecasting**.")
+st.sidebar.info(f"Model trained on **ALL 10 Nigerian Stocks** using a **{LOOKBACK_PERIOD}-day** lookback window and **5 features** (Price, Open, High, Low, Change %). This model performs **recursive multi-step forecasting**.")
 
 
 # --- 3. RECURSIVE PREDICTION FUNCTION (FINALIZED MULTI-FEATURE LOGIC) ---
