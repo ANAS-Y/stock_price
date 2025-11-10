@@ -264,7 +264,6 @@ ax.grid(True, linestyle=':', alpha=0.7)
 plt.xticks(rotation=45)
 plt.tight_layout()
 
-
 # Add the recursive prediction path to the chart if available in session state
 if 'df_prediction_path' in st.session_state and not st.session_state['df_prediction_path'].empty:
     df_path = st.session_state['df_prediction_path']
