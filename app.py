@@ -101,9 +101,8 @@ st.sidebar.info(f"Model trained on the **NSE All Share Index** using a **{LOOKBA
 def predict_recursive(org_data, model, scaler, target_date, lookback):
     """
     Generates multi-step, recursive predictions up to the target_date using 
-    a multi-feature input sequence. The complexity here lies in approximating 
-    the next day's 4 input features (Open, High, Low, Change %) from the one 
-    predicted output (Price) for the recursive step.
+    a multi-feature input sequence. Fixes the ValueError by ensuring the 
+    scaler always receives a (1, 5) shaped array.
     """
     
     last_date = org_data['Date'].max()
@@ -121,6 +120,9 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
     prediction_prices = []
     current_date = last_date + pd.Timedelta(days=1)
 
+    # Get index of 'Price' feature for easy access
+    PRICE_INDEX = TRAINING_FEATURES.index('Price')
+
     while current_date <= target_date:
         
         # Skip weekends/non-trading days (approximation)
@@ -129,49 +131,47 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
             # Reshape for LSTM: [1, lookback, num_features (5)]
             X_test = np.reshape(current_input_sequence, (1, lookback, len(TRAINING_FEATURES)))
             
-            # Predict the next scaled price (Output is a single scaled value)
+            # Predict the next scaled price (Output is a single scaled value: e.g., [[0.5]])
             scaled_prediction_price = model.predict(X_test, verbose=0)
             
             # ----------------------------------------------------
-            # Recursive Step: Estimate the remaining 4 features for the next day's input
+            # Recursive Step: Inverse Transform and Sequence Update
             # ----------------------------------------------------
             
-            # 1. Create a placeholder array for the inverse transform
-            # This is necessary because the scaler expects 5 columns, but only Price (index 0) is predicted
-            mock_row = np.zeros((1, len(TRAINING_FEATURES)))
-            mock_row[0, TRAINING_FEATURES.index('Price')] = scaled_prediction_price
+            # 1. Inverse transform the predicted price to get the actual Naira price
             
-            # 2. Inverse transform the mock row to get the actual price
-            predicted_row_unscaled = scaler.inverse_transform(mock_row)[0]
-            predicted_price = predicted_row_unscaled[TRAINING_FEATURES.index('Price')]
+            # Create a mock array for the inverse transform (1 row, 5 columns)
+            mock_row_scaled = np.zeros((1, len(TRAINING_FEATURES)))
+            # Place the predicted scaled price into the Price index (index 0)
+            mock_row_scaled[0, PRICE_INDEX] = scaled_prediction_price[0, 0]
             
-            # 3. Store prediction
+            # Inverse transform the mock row to get the actual unscaled values
+            predicted_row_unscaled = scaler.inverse_transform(mock_row_scaled)[0]
+            predicted_price = predicted_row_unscaled[PRICE_INDEX]
+            
+            # 2. Store prediction
             prediction_dates.append(current_date)
             prediction_prices.append(predicted_price)
             
-            # 4. Create the NEW SCALED INPUT ROW for the next recursive step
+            # 3. Create the NEW SCALED INPUT ROW for the next recursive step
             
-            # We must approximate the next day's Open, High, Low, and Change %.
-            # The most stable approach is to assume the predicted closing price is 
-            # the anchor for the Open/High/Low features in the next input step.
-            
-            # Create a mock array for the next input (UNSCALED)
+            # The most stable approximation for the next input (UNSCALED) is:
             next_input_unscaled = np.array([
-                predicted_price, # Price (Predicted)
-                predicted_price, # Open (Approx = Price)
-                predicted_price * 1.005, # High (Approx +0.5% volatility)
-                predicted_price * 0.995, # Low (Approx -0.5% volatility)
-                0.0 # Change % (Assume 0 for base prediction)
-            ]).reshape(1, -1)
-            
+                predicted_price,                       # Price (Predicted)
+                predicted_price,                       # Open (Approx = Price)
+                predicted_price * 1.005,               # High (Approx +0.5% volatility)
+                predicted_price * 0.995,               # Low (Approx -0.5% volatility)
+                0.0                                    # Change % (Assume 0 for base prediction)
+            ]).reshape(1, -1) # Ensure this is (1, 5)
+
             # Scale this new input row using the multi-feature scaler
             next_input_scaled = scaler.transform(next_input_unscaled)
             
-            # 5. Update the input sequence
-            # Remove the oldest row (the first element)
+            # 4. Update the input sequence
+            # Remove the oldest row (the first element, size 1x5)
             current_input_sequence = np.delete(current_input_sequence, 0, axis=0)
             
-            # Append the new predicted/approximated scaled row to the end
+            # Append the new predicted/approximated scaled row (size 1x5) to the end
             current_input_sequence = np.append(current_input_sequence, next_input_scaled, axis=0)
 
         # Move to the next day
@@ -263,6 +263,7 @@ ax.legend()
 ax.grid(True, linestyle=':', alpha=0.7)
 plt.xticks(rotation=45)
 plt.tight_layout()
+
 
 # Add the recursive prediction path to the chart if available in session state
 if 'df_prediction_path' in st.session_state and not st.session_state['df_prediction_path'].empty:
