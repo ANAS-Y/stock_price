@@ -22,7 +22,7 @@ st.set_page_config(layout="wide", page_title="Stock Price Prediction (LSTM)")
 # Cache resources (model and scaler) so they only load once
 @st.cache_resource
 def load_all_files():
-    """Loads model, scaler, and cleaned data from disk."""
+    """Loads model, scaler, and cleaned data from disk, enforcing numeric types."""
     
     required_files = [MODEL_FILE, SCALER_FILE, DATA_FILE]
     missing_files = [f for f in required_files if not os.path.exists(f)]
@@ -41,6 +41,14 @@ def load_all_files():
         scaler = joblib.load(SCALER_FILE)
         df = pd.read_csv(DATA_FILE)
         df['Date'] = pd.to_datetime(df['Date'])
+        
+        # --- FIX: Robust Type Casting (Ensures 5 features are always floats) ---
+        for col in TRAINING_FEATURES:
+            if col in df.columns:
+                # Coerce errors to NaN and fill with the column mean for safety
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(df[col].mean())
+        # --- END FIX ---
+        
         return model, scaler, df
         
     except Exception as e:
@@ -101,8 +109,8 @@ st.sidebar.info(f"Model trained on the **NSE All Share Index** using a **{LOOKBA
 def predict_recursive(org_data, model, scaler, target_date, lookback):
     """
     Generates multi-step, recursive predictions up to the target_date using 
-    a multi-feature input sequence. Fixes the ValueError by ensuring the 
-    scaler always receives a (1, 5) shaped array.
+    a multi-feature input sequence. The function now uses robust column 
+    selection and scaling.
     """
     
     last_date = org_data['Date'].max()
@@ -111,7 +119,10 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
         return None, None
 
     # 1. Prepare initial sequence (multi-feature)
+    # This explicitly selects the 5 required float columns
     last_60_rows = org_data[TRAINING_FEATURES].values[-lookback:]
+    
+    # Scale the input sequence
     scaled_input_sequence = scaler.transform(last_60_rows)
     
     current_input_sequence = deepcopy(scaled_input_sequence)
@@ -131,7 +142,7 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
             # Reshape for LSTM: [1, lookback, num_features (5)]
             X_test = np.reshape(current_input_sequence, (1, lookback, len(TRAINING_FEATURES)))
             
-            # Predict the next scaled price (Output is a single scaled value: e.g., [[0.5]])
+            # Predict the next scaled price (Output is a single scaled value)
             scaled_prediction_price = model.predict(X_test, verbose=0)
             
             # ----------------------------------------------------
@@ -156,6 +167,7 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
             # 3. Create the NEW SCALED INPUT ROW for the next recursive step
             
             # The most stable approximation for the next input (UNSCALED) is:
+            # We use the predicted price as the anchor for the other features
             next_input_unscaled = np.array([
                 predicted_price,                       # Price (Predicted)
                 predicted_price,                       # Open (Approx = Price)
