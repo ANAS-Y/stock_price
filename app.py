@@ -41,8 +41,12 @@ if df_all.empty or model is None or scaler is None:
 
 # Sidebar for selection
 organizations = df_all['Organisation'].unique()
-# Default to NSE index, as that is what the model was trained on
-default_index = np.where(organizations == 'NSE')[0][0] if 'NSE' in organizations else 0 
+# Find the index of 'NSE' and explicitly cast it to a standard Python int()
+if 'NSE' in organizations:
+    default_index = int(np.where(organizations == 'NSE')[0][0])
+else:
+    default_index = 0
+    
 selected_org = st.sidebar.selectbox("Select Organisation/Ticker for Analysis:", organizations, index=default_index) 
 
 st.sidebar.markdown("---")
