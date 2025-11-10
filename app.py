@@ -6,7 +6,7 @@ from tensorflow.keras.models import load_model
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import os 
-from copy import deepcopy # For safe data copying
+from copy import deepcopy 
 
 # --- 1. CONFIGURATION AND LOADING ---
 
@@ -15,6 +15,7 @@ MODEL_FILE = 'lstm_model_nse.h5'
 SCALER_FILE = 'scaler_nse.joblib'
 DATA_FILE = 'cleaned_nigerian_stock_data.csv'
 LOOKBACK_PERIOD = 60 # Must match the training lookback period
+TRAINING_FEATURES = ['Price', 'Open', 'High', 'Low', 'Change %']
 
 st.set_page_config(layout="wide", page_title="Stock Price Prediction (LSTM)")
 
@@ -92,24 +93,28 @@ prediction_date = pd.to_datetime(prediction_date) # Convert to datetime for comp
 # --- SIDEBAR: MODEL INFO ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("Model Information")
-st.sidebar.info(f"Model trained on the **NSE All Share Index** using a **{LOOKBACK_PERIOD}-day** lookback window. This model now performs **recursive multi-step forecasting** to predict the price for the target date.")
+st.sidebar.info(f"Model trained on the **NSE All Share Index** using a **{LOOKBACK_PERIOD}-day** lookback window and **5 features** (Price, Open, High, Low, Change %). This model performs **recursive multi-step forecasting**.")
 
 
-# --- 3. RECURSIVE PREDICTION FUNCTION (UPDATED) ---
+# --- 3. RECURSIVE PREDICTION FUNCTION (FINALIZED MULTI-FEATURE LOGIC) ---
 
 def predict_recursive(org_data, model, scaler, target_date, lookback):
     """
-    Generates multi-step, recursive predictions up to the target_date.
-    Returns: The final predicted price and a DataFrame of the entire prediction path.
+    Generates multi-step, recursive predictions up to the target_date using 
+    a multi-feature input sequence. The complexity here lies in approximating 
+    the next day's 4 input features (Open, High, Low, Change %) from the one 
+    predicted output (Price) for the recursive step.
     """
     
     last_date = org_data['Date'].max()
     
-    # 1. Prepare initial sequence (scaled)
-    last_prices = org_data['Price'].values[-lookback:].reshape(-1, 1)
-    scaled_input_sequence = scaler.transform(last_prices)
+    if len(org_data) < lookback:
+        return None, None
+
+    # 1. Prepare initial sequence (multi-feature)
+    last_60_rows = org_data[TRAINING_FEATURES].values[-lookback:]
+    scaled_input_sequence = scaler.transform(last_60_rows)
     
-    # Use a deepcopy to modify the sequence iteratively
     current_input_sequence = deepcopy(scaled_input_sequence)
     
     prediction_dates = []
@@ -119,27 +124,55 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
     while current_date <= target_date:
         
         # Skip weekends/non-trading days (approximation)
-        if current_date.weekday() < 5: # Monday is 0, Friday is 4
+        if current_date.weekday() < 5: 
             
-            # Reshape for LSTM: [1, lookback, 1]
-            X_test = np.reshape(current_input_sequence, (1, lookback, 1))
+            # Reshape for LSTM: [1, lookback, num_features (5)]
+            X_test = np.reshape(current_input_sequence, (1, lookback, len(TRAINING_FEATURES)))
             
-            # Predict the next scaled price
-            scaled_prediction = model.predict(X_test, verbose=0)
+            # Predict the next scaled price (Output is a single scaled value)
+            scaled_prediction_price = model.predict(X_test, verbose=0)
             
-            # Inverse transform to get the actual Naira price
-            predicted_price = scaler.inverse_transform(scaled_prediction)[0, 0]
+            # ----------------------------------------------------
+            # Recursive Step: Estimate the remaining 4 features for the next day's input
+            # ----------------------------------------------------
             
-            # Store prediction
+            # 1. Create a placeholder array for the inverse transform
+            # This is necessary because the scaler expects 5 columns, but only Price (index 0) is predicted
+            mock_row = np.zeros((1, len(TRAINING_FEATURES)))
+            mock_row[0, TRAINING_FEATURES.index('Price')] = scaled_prediction_price
+            
+            # 2. Inverse transform the mock row to get the actual price
+            predicted_row_unscaled = scaler.inverse_transform(mock_row)[0]
+            predicted_price = predicted_row_unscaled[TRAINING_FEATURES.index('Price')]
+            
+            # 3. Store prediction
             prediction_dates.append(current_date)
             prediction_prices.append(predicted_price)
             
-            # Update the input sequence for the next step (recursive part)
-            # 1. Remove the oldest price (the first element)
+            # 4. Create the NEW SCALED INPUT ROW for the next recursive step
+            
+            # We must approximate the next day's Open, High, Low, and Change %.
+            # The most stable approach is to assume the predicted closing price is 
+            # the anchor for the Open/High/Low features in the next input step.
+            
+            # Create a mock array for the next input (UNSCALED)
+            next_input_unscaled = np.array([
+                predicted_price, # Price (Predicted)
+                predicted_price, # Open (Approx = Price)
+                predicted_price * 1.005, # High (Approx +0.5% volatility)
+                predicted_price * 0.995, # Low (Approx -0.5% volatility)
+                0.0 # Change % (Assume 0 for base prediction)
+            ]).reshape(1, -1)
+            
+            # Scale this new input row using the multi-feature scaler
+            next_input_scaled = scaler.transform(next_input_unscaled)
+            
+            # 5. Update the input sequence
+            # Remove the oldest row (the first element)
             current_input_sequence = np.delete(current_input_sequence, 0, axis=0)
             
-            # 2. Append the new predicted scaled price to the end
-            current_input_sequence = np.append(current_input_sequence, scaled_prediction, axis=0)
+            # Append the new predicted/approximated scaled row to the end
+            current_input_sequence = np.append(current_input_sequence, next_input_scaled, axis=0)
 
         # Move to the next day
         current_date += pd.Timedelta(days=1)
@@ -182,34 +215,37 @@ st.header(f"Forecast for {selected_org}")
 
 if st.button(f"Generate Multi-Step Forecast up to {prediction_date.strftime('%Y-%m-%d')}"):
     
-    with st.spinner('Generating recursive forecast...'):
-        predicted_price, df_prediction_path = predict_recursive(df_org, model, scaler, prediction_date, LOOKBACK_PERIOD)
-    
-    if predicted_price is not None:
-        
-        # Store prediction path in session state to use in the visualization section (Section 6)
-        st.session_state['df_prediction_path'] = df_prediction_path
-        st.session_state['prediction_date'] = prediction_date
-        
-        st.success(f"**Predicted Closing Price for {selected_org} on {prediction_date.strftime('%Y-%m-%d')}:**")
-        st.balloons()
-        
-        # Display the main prediction
-        st.markdown(f"## ₦{predicted_price:,.2f}")
-        
-        # Comparison to latest price
-        change_pct = (predicted_price - latest_price) / latest_price * 100
-        st.markdown(f"*(Total change from previous close: **{change_pct:+.2f}%**)*")
-        
-        if change_pct > 0:
-            st.markdown("**(Predicted Trend: UP)**")
-        elif change_pct < 0:
-            st.markdown("**(Predicted Trend: DOWN)**")
-        else:
-            st.markdown("**(Predicted Trend: NEUTRAL)**")
-            
+    if prediction_date.date() <= last_available_date.date():
+        st.error("Please select a prediction date that is after the latest available data date.")
     else:
-        st.warning(f"Not enough historical data for {selected_org} (Requires at least {LOOKBACK_PERIOD} days).")
+        with st.spinner('Generating recursive forecast...'):
+            predicted_price, df_prediction_path = predict_recursive(df_org, model, scaler, prediction_date, LOOKBACK_PERIOD)
+        
+        if predicted_price is not None:
+            
+            # Store prediction path in session state to use in the visualization section (Section 6)
+            st.session_state['df_prediction_path'] = df_prediction_path
+            st.session_state['prediction_date'] = prediction_date
+            
+            st.success(f"**Predicted Closing Price for {selected_org} on {prediction_date.strftime('%Y-%m-%d')}:**")
+            st.balloons()
+            
+            # Display the main prediction
+            st.markdown(f"## ₦{predicted_price:,.2f}")
+            
+            # Comparison to latest price
+            change_pct = (predicted_price - latest_price) / latest_price * 100
+            st.markdown(f"*(Total change from previous close: **{change_pct:+.2f}%**)*")
+            
+            if change_pct > 0:
+                st.markdown("**(Predicted Trend: UP)**")
+            elif change_pct < 0:
+                st.markdown("**(Predicted Trend: DOWN)**")
+            else:
+                st.markdown("**(Predicted Trend: NEUTRAL)**")
+                
+        else:
+            st.warning(f"Not enough historical data for {selected_org} (Requires at least {LOOKBACK_PERIOD} days).")
 
 
 # --- 6. VISUALIZATION ---
