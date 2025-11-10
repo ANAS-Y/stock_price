@@ -5,6 +5,7 @@ import joblib
 from tensorflow.keras.models import load_model
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
+import os # Import the os library for file checking
 
 # --- 1. CONFIGURATION AND LOADING ---
 
@@ -20,14 +21,28 @@ st.set_page_config(layout="wide", page_title="Stock Price Prediction (LSTM)")
 @st.cache_resource
 def load_all_files():
     """Loads model, scaler, and cleaned data from disk."""
+    
+    required_files = [MODEL_FILE, SCALER_FILE, DATA_FILE]
+    missing_files = [f for f in required_files if not os.path.exists(f)]
+
+    if missing_files:
+        st.error(
+            f"**FATAL ERROR: Missing Deployment Files.**"
+            f"\nPlease ensure the following files are uploaded to your Streamlit Cloud repository (in the same directory as app.py):"
+            f"\n- **{', '.join(missing_files)}**"
+        )
+        return None, None, pd.DataFrame()
+        
     try:
-        model = load_model(MODEL_FILE, compile=False) # compile=False avoids potential compile warnings/errors on load
+        # Load files now that existence is confirmed
+        model = load_model(MODEL_FILE, compile=False) 
         scaler = joblib.load(SCALER_FILE)
         df = pd.read_csv(DATA_FILE)
         df['Date'] = pd.to_datetime(df['Date'])
         return model, scaler, df
-    except FileNotFoundError as e:
-        st.error(f"FATAL ERROR: Required file not found. Please ensure {e.filename} and the other two files are in the same folder as app.py.")
+        
+    except Exception as e:
+        st.error(f"**FATAL ERROR:** An unexpected error occurred during file loading: {e}")
         return None, None, pd.DataFrame()
 
 model, scaler, df_all = load_all_files()
@@ -38,6 +53,7 @@ st.title("🇳🇬 NSE Stock Price Forecasting (LSTM RNN)")
 st.caption("Developed by Abdulrashid Abubakar | Modibbo Adama University, Yola")
 
 if df_all.empty or model is None or scaler is None:
+    # If file loading failed, stop the application here
     st.stop()
 
 # --- SIDEBAR: ORGANIZATION SELECTION ---
