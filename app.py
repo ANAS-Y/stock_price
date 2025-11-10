@@ -5,7 +5,8 @@ import joblib
 from tensorflow.keras.models import load_model
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-import os # Import the os library for file checking
+import os 
+from copy import deepcopy # For safe data copying
 
 # --- 1. CONFIGURATION AND LOADING ---
 
@@ -53,7 +54,6 @@ st.title("🇳🇬 NSE Stock Price Forecasting (LSTM RNN)")
 st.caption("Developed by Abdulrashid Abubakar | Modibbo Adama University, Yola")
 
 if df_all.empty or model is None or scaler is None:
-    # If file loading failed, stop the application here
     st.stop()
 
 # --- SIDEBAR: ORGANIZATION SELECTION ---
@@ -92,33 +92,71 @@ prediction_date = pd.to_datetime(prediction_date) # Convert to datetime for comp
 # --- SIDEBAR: MODEL INFO ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("Model Information")
-st.sidebar.info(f"Model trained on the **NSE All Share Index** using a **{LOOKBACK_PERIOD}-day** lookback window. It is applied to the selected stock.")
+st.sidebar.info(f"Model trained on the **NSE All Share Index** using a **{LOOKBACK_PERIOD}-day** lookback window. This model now performs **recursive multi-step forecasting** to predict the price for the target date.")
 
 
-# --- 3. PREDICTION FUNCTION ---
+# --- 3. RECURSIVE PREDICTION FUNCTION (UPDATED) ---
 
-def predict_price(org_data, model, scaler, target_date):
-    """Generates the prediction for the given target date."""
+def predict_recursive(org_data, model, scaler, target_date, lookback):
+    """
+    Generates multi-step, recursive predictions up to the target_date.
+    Returns: The final predicted price and a DataFrame of the entire prediction path.
+    """
     
-    if len(org_data) < LOOKBACK_PERIOD:
-        return None # Not enough data
+    last_date = org_data['Date'].max()
+    
+    # 1. Prepare initial sequence (scaled)
+    last_prices = org_data['Price'].values[-lookback:].reshape(-1, 1)
+    scaled_input_sequence = scaler.transform(last_prices)
+    
+    # Use a deepcopy to modify the sequence iteratively
+    current_input_sequence = deepcopy(scaled_input_sequence)
+    
+    prediction_dates = []
+    prediction_prices = []
+    current_date = last_date + pd.Timedelta(days=1)
+
+    while current_date <= target_date:
         
-    # Use the 'Price' column for prediction
-    last_prices = org_data['Price'].values[-LOOKBACK_PERIOD:].reshape(-1, 1)
+        # Skip weekends/non-trading days (approximation)
+        if current_date.weekday() < 5: # Monday is 0, Friday is 4
+            
+            # Reshape for LSTM: [1, lookback, 1]
+            X_test = np.reshape(current_input_sequence, (1, lookback, 1))
+            
+            # Predict the next scaled price
+            scaled_prediction = model.predict(X_test, verbose=0)
+            
+            # Inverse transform to get the actual Naira price
+            predicted_price = scaler.inverse_transform(scaled_prediction)[0, 0]
+            
+            # Store prediction
+            prediction_dates.append(current_date)
+            prediction_prices.append(predicted_price)
+            
+            # Update the input sequence for the next step (recursive part)
+            # 1. Remove the oldest price (the first element)
+            current_input_sequence = np.delete(current_input_sequence, 0, axis=0)
+            
+            # 2. Append the new predicted scaled price to the end
+            current_input_sequence = np.append(current_input_sequence, scaled_prediction, axis=0)
+
+        # Move to the next day
+        current_date += pd.Timedelta(days=1)
+        
+    if not prediction_prices:
+        return None, None
+
+    # Final result is the last predicted price
+    final_predicted_price = prediction_prices[-1]
     
-    # 1. Scale the input data using the trained scaler
-    scaled_input = scaler.transform(last_prices)
+    # Create prediction DataFrame
+    df_prediction_path = pd.DataFrame({
+        'Date': prediction_dates,
+        'Price': prediction_prices
+    })
     
-    # 2. Reshape for LSTM input: [1, 60, 1]
-    X_test = np.reshape(scaled_input, (1, LOOKBACK_PERIOD, 1))
-    
-    # 3. Predict the scaled price
-    scaled_prediction = model.predict(X_test, verbose=0)
-    
-    # 4. Inverse transform to get the actual Naira price
-    predicted_price = scaler.inverse_transform(scaled_prediction)[0, 0]
-    
-    return predicted_price
+    return final_predicted_price, df_prediction_path
 
 # --- 4. MAIN METRICS DISPLAY ---
 
@@ -142,13 +180,17 @@ else:
 # --- 5. PREDICTION SECTION ---
 st.header(f"Forecast for {selected_org}")
 
-if st.button(f"Generate Forecast for {prediction_date.strftime('%Y-%m-%d')}"):
+if st.button(f"Generate Multi-Step Forecast up to {prediction_date.strftime('%Y-%m-%d')}"):
     
-    # NOTE: The current model predicts only the NEXT single step. 
-    # For any date other than the day after last_available_date, this is an extrapolated one-step prediction.
-    predicted_price = predict_price(df_org, model, scaler, prediction_date)
+    with st.spinner('Generating recursive forecast...'):
+        predicted_price, df_prediction_path = predict_recursive(df_org, model, scaler, prediction_date, LOOKBACK_PERIOD)
     
     if predicted_price is not None:
+        
+        # Store prediction path in session state to use in the visualization section (Section 6)
+        st.session_state['df_prediction_path'] = df_prediction_path
+        st.session_state['prediction_date'] = prediction_date
+        
         st.success(f"**Predicted Closing Price for {selected_org} on {prediction_date.strftime('%Y-%m-%d')}:**")
         st.balloons()
         
@@ -157,7 +199,7 @@ if st.button(f"Generate Forecast for {prediction_date.strftime('%Y-%m-%d')}"):
         
         # Comparison to latest price
         change_pct = (predicted_price - latest_price) / latest_price * 100
-        st.markdown(f"*(Change from previous close: **{change_pct:+.2f}%**)*")
+        st.markdown(f"*(Total change from previous close: **{change_pct:+.2f}%**)*")
         
         if change_pct > 0:
             st.markdown("**(Predicted Trend: UP)**")
@@ -186,9 +228,18 @@ ax.grid(True, linestyle=':', alpha=0.7)
 plt.xticks(rotation=45)
 plt.tight_layout()
 
-# Add the prediction point to the chart if a prediction was just made
-if 'predicted_price' in locals() and predicted_price is not None:
-    ax.scatter(prediction_date, predicted_price, color='red', marker='*', s=200, label='Predicted Price')
+
+# Add the recursive prediction path to the chart if available in session state
+if 'df_prediction_path' in st.session_state and not st.session_state['df_prediction_path'].empty:
+    df_path = st.session_state['df_prediction_path']
+    final_predicted_price = df_path['Price'].iloc[-1]
+    
+    # 1. Plot the entire predicted path
+    ax.plot(df_path['Date'], df_path['Price'], label='Recursive Forecast', color='orange', linestyle='--', linewidth=1.5)
+    
+    # 2. Highlight the final prediction point
+    ax.scatter(df_path['Date'].iloc[-1], final_predicted_price, color='red', marker='*', s=200, label='Final Predicted Price')
+    
     ax.legend()
 
 st.pyplot(fig)
