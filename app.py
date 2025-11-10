@@ -7,15 +7,17 @@ import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
 import os 
 from copy import deepcopy 
+from sklearn.preprocessing import MinMaxScaler # Needed for local scaling
 
 # --- 1. CONFIGURATION AND LOADING ---
 
 # Define file paths
-MODEL_FILE = 'lstm_model_all_data.h5' # NOTE: Must match file from Colab
-SCALER_FILE = 'scaler_all_data.joblib' # NOTE: Must match file from Colab
+MODEL_FILE = 'lstm_model_all_data.h5' # The model trained on all 10 stocks
+SCALER_FILE = 'scaler_all_data.joblib' # The scaler trained on all 10 stocks (only used for structure, not for prediction scaling)
 DATA_FILE = 'cleaned_nigerian_stock_data.csv'
 LOOKBACK_PERIOD = 60 # Must match the training lookback period
 TRAINING_FEATURES = ['Price', 'Open', 'High', 'Low', 'Change %']
+MAX_DAILY_CHANGE = 0.05 # Constraint: Maximum 5% predicted change per day
 
 st.set_page_config(layout="wide", page_title="Stock Price Prediction (LSTM)")
 
@@ -38,37 +40,36 @@ def load_all_files():
     try:
         # Load files now that existence is confirmed
         model = load_model(MODEL_FILE, compile=False) 
-        scaler = joblib.load(SCALER_FILE)
+        # We still load the global scaler, but primarily to get its shape/structure
+        global_scaler = joblib.load(SCALER_FILE) 
         df = pd.read_csv(DATA_FILE)
         df['Date'] = pd.to_datetime(df['Date'])
         
-        # --- FIX: Robust Type Casting (Ensures 5 features are always floats) ---
+        # Robust Type Casting (Ensures 5 features are always floats)
         for col in TRAINING_FEATURES:
             if col in df.columns:
-                # Coerce errors to NaN and fill with the column mean for safety
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(df[col].mean())
-        # --- END FIX ---
         
-        return model, scaler, df
+        return model, global_scaler, df
         
     except Exception as e:
         st.error(f"**FATAL ERROR:** An unexpected error occurred during file loading: {e}")
+        st.code(f"Error details: {e}", language='text')
         return None, None, pd.DataFrame()
 
-model, scaler, df_all = load_all_files()
+model, global_scaler, df_all = load_all_files()
 
 # --- 2. APP LAYOUT, CHECKS, AND DATE SELECTION ---
 
 st.title("🇳🇬 NSE Stock Price Forecasting (LSTM RNN)")
 st.caption("Developed by Abdulrashid Abubakar | Modibbo Adama University, Yola")
 
-if df_all.empty or model is None or scaler is None:
+if df_all.empty or model is None or global_scaler is None:
     st.stop()
 
 # --- SIDEBAR: ORGANIZATION SELECTION ---
 organizations = df_all['Organisation'].unique()
 if 'NSE' in organizations:
-    # Set default index to NSE, but list all organizations
     default_index = int(np.where(organizations == 'NSE')[0][0])
 else:
     default_index = 0
@@ -83,9 +84,7 @@ last_available_date = df_org['Date'].max()
 st.sidebar.markdown("---")
 st.sidebar.subheader("Set Prediction Date")
 
-# Calculate the first valid prediction date (the day after the last available data)
 min_date = last_available_date + pd.Timedelta(days=1)
-# Default to today's date if it's after the min_date, otherwise use min_date
 today = datetime.now().date()
 default_date = max(min_date.date(), today)
 
@@ -97,20 +96,20 @@ prediction_date = st.sidebar.date_input(
     max_value=min_date.date() + timedelta(days=365*2), # Limit to 2 years ahead
     key="prediction_date_input"
 )
-prediction_date = pd.to_datetime(prediction_date) # Convert to datetime for comparison
+prediction_date = pd.to_datetime(prediction_date)
 
 # --- SIDEBAR: MODEL INFO ---
 st.sidebar.markdown("---")
 st.sidebar.subheader("Model Information")
-st.sidebar.info(f"Model trained on **ALL 10 Nigerian Stocks** using a **{LOOKBACK_PERIOD}-day** lookback window and **5 features** (Price, Open, High, Low, Change %). This model performs **recursive multi-step forecasting**.")
+st.sidebar.info(f"Model trained on **ALL 10 Nigerian Stocks** using a **{LOOKBACK_PERIOD}-day** lookback window and **5 features**. Prediction uses **localized scaling** for stability.")
 
 
-# --- 3. RECURSIVE PREDICTION FUNCTION (FINALIZED MULTI-FEATURE LOGIC) ---
+# --- 3. RECURSIVE PREDICTION FUNCTION (FINALIZED WITH LOCAL SCALING) ---
 
-def predict_recursive(org_data, model, scaler, target_date, lookback):
+def predict_recursive(org_data, model, lookback, target_date):
     """
     Generates multi-step, recursive predictions up to the target_date using 
-    a multi-feature input sequence, applying constraints for stability.
+    a multi-feature input sequence and a LOCALLY fitted scaler for stability.
     """
     
     last_date = org_data['Date'].max()
@@ -118,24 +117,24 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
     if len(org_data) < lookback:
         return None, None
 
-    # 1. Prepare initial sequence (multi-feature)
+    # 1. LOCAL SCALER INITIALIZATION (CRUCIAL FIX)
+    # Fit a new scaler ONLY on the data of the selected stock
+    local_scaler = MinMaxScaler(feature_range=(0, 1))
+    data_for_local_scaler = org_data[TRAINING_FEATURES].values
+    local_scaler.fit(data_for_local_scaler)
+    
+    # 2. Prepare initial sequence (multi-feature)
     last_60_rows = org_data[TRAINING_FEATURES].values[-lookback:]
-    scaled_input_sequence = scaler.transform(last_60_rows)
+    scaled_input_sequence = local_scaler.transform(last_60_rows)
     current_input_sequence = deepcopy(scaled_input_sequence)
     
     prediction_dates = []
     prediction_prices = []
     current_date = last_date + pd.Timedelta(days=1)
 
-    # Get index of 'Price' feature for easy access (0)
+    # Get index of 'Price' feature (always 0 in our TRAINING_FEATURES list)
     PRICE_INDEX = TRAINING_FEATURES.index('Price')
-    
-    # Store the last actual price to constrain the prediction
     last_actual_price = org_data['Price'].iloc[-1]
-
-    # Calculate the scaled equivalent of the price constraint
-    # We will use 5% as the MAX allowed daily change.
-    MAX_DAILY_CHANGE = 0.05
     
     while current_date <= target_date:
         
@@ -152,31 +151,25 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
             # Recursive Step: Inverse Transform and Sequence Update
             # ----------------------------------------------------
             
-            # Determine the baseline price for constraining (previous prediction or last actual price)
-            if prediction_prices:
-                baseline_price = prediction_prices[-1]
-            else:
-                baseline_price = last_actual_price
+            # Determine the baseline price for constraining 
+            baseline_price = prediction_prices[-1] if prediction_prices else last_actual_price
                 
             # 1. Inverse transform the predicted price to get the actual Naira price
             mock_row_scaled = np.zeros((1, len(TRAINING_FEATURES)))
             mock_row_scaled[0, PRICE_INDEX] = scaled_prediction_price[0, 0]
-            predicted_row_unscaled = scaler.inverse_transform(mock_row_scaled)[0]
+            
+            # Use the LOCAL SCALER for inverse transform
+            predicted_row_unscaled = local_scaler.inverse_transform(mock_row_scaled)[0]
             unconstrained_price = predicted_row_unscaled[PRICE_INDEX]
             
-            # --- FINAL STABILITY FIX: CONSTRAIN DAILY CHANGE ---
-            
-            # Calculate min/max price allowed (e.g., +/- 5% of the baseline price)
+            # --- STABILITY FIX: CONSTRAIN DAILY CHANGE ---
+            # Clip the price to enforce the realistic constraint (e.g., +/- 5% of the baseline price)
             max_allowed_price = baseline_price * (1 + MAX_DAILY_CHANGE)
             min_allowed_price = baseline_price * (1 - MAX_DAILY_CHANGE)
             
-            # Clip the price to enforce the constraint
             predicted_price = np.clip(unconstrained_price, min_allowed_price, max_allowed_price)
-            
-            # Ensure price cannot go negative (should be handled by clip and min_allowed, but safe to keep)
             if predicted_price <= 0:
                  predicted_price = 0.01 
-            # --- END FINAL STABILITY FIX ---
             
             # 2. Store prediction
             prediction_dates.append(current_date)
@@ -184,15 +177,14 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
             
             # 3. Create the NEW SCALED INPUT ROW for the next recursive step
             
-            # Use the CONSTRAINED predicted price for all 5 features 
-            # (Ensures all features scale consistently and prevents runaway errors)
+            # Use the CONSTRAINED predicted price for all 5 features (most stable approach)
             next_input_unscaled = np.full(
                 (1, len(TRAINING_FEATURES)), 
                 predicted_price
             )
 
-            # Scale this new input row using the multi-feature scaler
-            next_input_scaled = scaler.transform(next_input_unscaled)
+            # Scale this new input row using the LOCAL SCALER
+            next_input_scaled = local_scaler.transform(next_input_unscaled)
             
             # 4. Update the input sequence
             current_input_sequence = np.delete(current_input_sequence, 0, axis=0)
@@ -204,7 +196,6 @@ def predict_recursive(org_data, model, scaler, target_date, lookback):
     if not prediction_prices:
         return None, None
 
-    # Final result is the last predicted price
     final_predicted_price = prediction_prices[-1]
     
     # Create prediction DataFrame
@@ -243,7 +234,8 @@ if st.button(f"Generate Multi-Step Forecast up to {prediction_date.strftime('%Y-
         st.error("Please select a prediction date that is after the latest available data date.")
     else:
         with st.spinner('Generating recursive forecast...'):
-            predicted_price, df_prediction_path = predict_recursive(df_org, model, scaler, prediction_date, LOOKBACK_PERIOD)
+            # Pass only the necessary arguments (removing global_scaler)
+            predicted_price, df_prediction_path = predict_recursive(df_org, model, LOOKBACK_PERIOD, prediction_date)
         
         if predicted_price is not None:
             
