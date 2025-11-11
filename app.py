@@ -61,7 +61,7 @@ model, global_scaler, df_all = load_all_files()
 
 # --- 2. APP LAYOUT, CHECKS, AND DATE SELECTION ---
 
-st.title("🇳🇬 NSE Stock Price Forecasting (LSTM RNN)")
+st.title(" Stock Price Forecasting (LSTM RNN) 🇳🇬")
 st.caption("Developed by Abdulrashid Abubakar | Modibbo Adama University, Yola")
 
 if df_all.empty or model is None or global_scaler is None:
@@ -294,4 +294,4 @@ if 'df_prediction_path' in st.session_state and not st.session_state['df_predict
     
     ax.legend()
 
-st.pyplot(fig)
+st.pyplot(fig) 
