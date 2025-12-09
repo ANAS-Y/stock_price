@@ -5,293 +5,175 @@ import joblib
 from tensorflow.keras.models import load_model
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
-import os 
-from copy import deepcopy 
-from sklearn.preprocessing import MinMaxScaler # Needed for local scaling
+import os
+from copy import deepcopy
+from sklearn.preprocessing import MinMaxScaler
 
 # --- 1. CONFIGURATION AND LOADING ---
 
 # Define file paths
-MODEL_FILE = 'lstm_model_all_data.h5' # The model trained on all 10 stocks
-SCALER_FILE = 'scaler_all_data.joblib' # The scaler trained on all 10 stocks (only used for structure, not for prediction scaling)
-DATA_FILE = 'cleaned_nigerian_stock_data.csv'
-LOOKBACK_PERIOD = 60 # Must match the training lookback period
+MODEL_FILE = 'lstm_model_nse_augmented.h5' # NEW: Model trained on augmented NSE data
+DATA_FILE = 'NSE_Stock_datasets.csv' # Historic data for all stocks
+LOOKBACK_PERIOD = 60
 TRAINING_FEATURES = ['Price', 'Open', 'High', 'Low', 'Change %']
-MAX_DAILY_CHANGE = 0.05 # Constraint: Maximum 5% predicted change per day
+MAX_DAILY_CHANGE = 0.05 # 5% constraint
 
-st.set_page_config(layout="wide", page_title="Stock Price Prediction (LSTM)")
+st.set_page_config(layout="wide", page_title="Stock Price Prediction (NSE Model)")
 
-# Cache resources (model and scaler) so they only load once
 @st.cache_resource
-def load_all_files():
-    """Loads model, scaler, and cleaned data from disk, enforcing numeric types."""
-    
-    required_files = [MODEL_FILE, SCALER_FILE, DATA_FILE]
-    missing_files = [f for f in required_files if not os.path.exists(f)]
+def load_resources():
+    """Loads model and data. Note: No global scaler needed for prediction."""
 
-    if missing_files:
-        st.error(
-            f"**FATAL ERROR: Missing Deployment Files.**"
-            f"\nPlease ensure the following files are uploaded to your Streamlit Cloud repository (in the same directory as app.py):"
-            f"\n- **{', '.join(missing_files)}**"
-        )
-        return None, None, pd.DataFrame()
-        
+    if not os.path.exists(MODEL_FILE) or not os.path.exists(DATA_FILE):
+        st.error(f"Missing files. Ensure {MODEL_FILE} and {DATA_FILE} are present.")
+        return None, None
+
     try:
-        # Load files now that existence is confirmed
-        model = load_model(MODEL_FILE, compile=False) 
-        # We still load the global scaler, but primarily to get its shape/structure
-        global_scaler = joblib.load(SCALER_FILE) 
+        model = load_model(MODEL_FILE, compile=False)
         df = pd.read_csv(DATA_FILE)
         df['Date'] = pd.to_datetime(df['Date'])
-        
-        # Robust Type Casting (Ensures 5 features are always floats)
+
+        # Robust Cleaning
         for col in TRAINING_FEATURES:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(df[col].mean())
-        
-        return model, global_scaler, df
-        
+
+        return model, df
     except Exception as e:
-        st.error(f"**FATAL ERROR:** An unexpected error occurred during file loading: {e}")
-        st.code(f"Error details: {e}", language='text')
-        return None, None, pd.DataFrame()
+        st.error(f"Error loading resources: {e}")
+        return None, None
 
-model, global_scaler, df_all = load_all_files()
+model, df_all = load_resources()
 
-# --- 2. APP LAYOUT, CHECKS, AND DATE SELECTION ---
+# --- 2. SIDEBAR CONFIGURATION ---
 
-st.title(" Stock Price Forecasting (LSTM RNN) 🇳🇬")
-st.caption("Developed by Abdulrashid Abubakar | Modibbo Adama University, Yola")
+st.title("🇳🇬 NSE Stock Price Forecasting")
+st.caption("Powered by Augmented NSE Data Model (23,600+ Records)")
 
-if df_all.empty or model is None or global_scaler is None:
+if df_all is None or model is None:
     st.stop()
 
-# --- SIDEBAR: ORGANIZATION SELECTION ---
 organizations = df_all['Organisation'].unique()
-if 'NSE' in organizations:
-    default_index = int(np.where(organizations == 'NSE')[0][0])
-else:
-    default_index = 0
-    
-selected_org = st.sidebar.selectbox("Select Organisation/Ticker for Analysis:", organizations, index=default_index) 
+default_idx = int(np.where(organizations == 'NSE')[0][0]) if 'NSE' in organizations else 0
+selected_org = st.sidebar.selectbox("Select Ticker:", organizations, index=default_idx)
 
-# Filter data for the selected organization
 df_org = df_all[df_all['Organisation'] == selected_org].sort_values('Date').copy()
 last_available_date = df_org['Date'].max()
 
-# --- SIDEBAR: DATE SELECTION ---
 st.sidebar.markdown("---")
-st.sidebar.subheader("Set Prediction Date")
+st.sidebar.subheader("Prediction Settings")
 
 min_date = last_available_date + pd.Timedelta(days=1)
-today = datetime.now().date()
-default_date = max(min_date.date(), today)
-
+default_date = max(min_date.date(), datetime.now().date())
 
 prediction_date = st.sidebar.date_input(
-    "Select Target Prediction Date (after last close):",
+    "Target Date:",
     value=default_date,
     min_value=min_date.date(),
-    max_value=min_date.date() + timedelta(days=365*2), # Limit to 2 years ahead
-    key="prediction_date_input"
+    max_value=min_date.date() + timedelta(days=730)
 )
 prediction_date = pd.to_datetime(prediction_date)
 
-# --- SIDEBAR: MODEL INFO ---
-st.sidebar.markdown("---")
-st.sidebar.subheader("Model Information")
-st.sidebar.info(f"Model trained on **ALL 10 Nigerian Stocks** using a **{LOOKBACK_PERIOD}-day** lookback window and **5 features**. Prediction uses **localized scaling** for stability.")
+st.sidebar.info(f"Model: **NSE Augmented**\nSplit: **80% Train / 20% Test**\nStrategy: **Localized Scaling**")
 
+# --- 3. RECURSIVE PREDICTION LOGIC ---
 
-# --- 3. RECURSIVE PREDICTION FUNCTION (FINALIZED WITH LOCAL SCALING) ---
+def predict_recursive(org_data, model, target_date):
+    """Recursive prediction using localized scaling for stability."""
 
-def predict_recursive(org_data, model, lookback, target_date):
-    """
-    Generates multi-step, recursive predictions up to the target_date using 
-    a multi-feature input sequence and a LOCALLY fitted scaler for stability.
-    """
-    
-    last_date = org_data['Date'].max()
-    
-    if len(org_data) < lookback:
+    if len(org_data) < LOOKBACK_PERIOD:
         return None, None
 
-    # 1. LOCAL SCALER INITIALIZATION (CRUCIAL FIX)
-    # Fit a new scaler ONLY on the data of the selected stock
+    # 1. LOCAL SCALING (Crucial for applying NSE model to other stocks)
     local_scaler = MinMaxScaler(feature_range=(0, 1))
-    data_for_local_scaler = org_data[TRAINING_FEATURES].values
-    local_scaler.fit(data_for_local_scaler)
-    
-    # 2. Prepare initial sequence (multi-feature)
-    last_60_rows = org_data[TRAINING_FEATURES].values[-lookback:]
-    scaled_input_sequence = local_scaler.transform(last_60_rows)
-    current_input_sequence = deepcopy(scaled_input_sequence)
-    
-    prediction_dates = []
-    prediction_prices = []
-    current_date = last_date + pd.Timedelta(days=1)
+    data_values = org_data[TRAINING_FEATURES].values
+    local_scaler.fit(data_values) # Fit ONLY on selected stock's history
 
-    # Get index of 'Price' feature (always 0 in our TRAINING_FEATURES list)
-    PRICE_INDEX = TRAINING_FEATURES.index('Price')
-    last_actual_price = org_data['Price'].iloc[-1]
-    
-    while current_date <= target_date:
-        
-        # Skip weekends/non-trading days (approximation)
-        if current_date.weekday() < 5: 
-            
-            # Reshape for LSTM: [1, lookback, num_features (5)]
-            X_test = np.reshape(current_input_sequence, (1, lookback, len(TRAINING_FEATURES)))
-            
-            # Predict the next scaled price (Output is a single scaled value)
-            scaled_prediction_price = model.predict(X_test, verbose=0)
-            
-            # ----------------------------------------------------
-            # Recursive Step: Inverse Transform and Sequence Update
-            # ----------------------------------------------------
-            
-            # Determine the baseline price for constraining 
-            baseline_price = prediction_prices[-1] if prediction_prices else last_actual_price
-                
-            # 1. Inverse transform the predicted price to get the actual Naira price
-            mock_row_scaled = np.zeros((1, len(TRAINING_FEATURES)))
-            mock_row_scaled[0, PRICE_INDEX] = scaled_prediction_price[0, 0]
-            
-            # Use the LOCAL SCALER for inverse transform
-            predicted_row_unscaled = local_scaler.inverse_transform(mock_row_scaled)[0]
-            unconstrained_price = predicted_row_unscaled[PRICE_INDEX]
-            
-            # --- STABILITY FIX: CONSTRAIN DAILY CHANGE ---
-            # Clip the price to enforce the realistic constraint (e.g., +/- 5% of the baseline price)
-            max_allowed_price = baseline_price * (1 + MAX_DAILY_CHANGE)
-            min_allowed_price = baseline_price * (1 - MAX_DAILY_CHANGE)
-            
-            predicted_price = np.clip(unconstrained_price, min_allowed_price, max_allowed_price)
-            if predicted_price <= 0:
-                 predicted_price = 0.01 
-            
-            # 2. Store prediction
-            prediction_dates.append(current_date)
-            prediction_prices.append(predicted_price)
-            
-            # 3. Create the NEW SCALED INPUT ROW for the next recursive step
-            
-            # Use the CONSTRAINED predicted price for all 5 features (most stable approach)
-            next_input_unscaled = np.full(
-                (1, len(TRAINING_FEATURES)), 
-                predicted_price
-            )
+    # 2. Initial Sequence
+    last_60 = data_values[-LOOKBACK_PERIOD:]
+    current_seq = local_scaler.transform(last_60) # Scale to 0-1
 
-            # Scale this new input row using the LOCAL SCALER
-            next_input_scaled = local_scaler.transform(next_input_unscaled)
-            
-            # 4. Update the input sequence
-            current_input_sequence = np.delete(current_input_sequence, 0, axis=0)
-            current_input_sequence = np.append(current_input_sequence, next_input_scaled, axis=0)
+    predictions = []
+    dates = []
+    curr_date = last_available_date + timedelta(days=1)
 
-        # Move to the next day
-        current_date += pd.Timedelta(days=1)
-        
-    if not prediction_prices:
-        return None, None
+    PRICE_IDX = TRAINING_FEATURES.index('Price')
+    last_price = data_values[-1, PRICE_IDX] # Unscaled last price
 
-    final_predicted_price = prediction_prices[-1]
-    
-    # Create prediction DataFrame
-    df_prediction_path = pd.DataFrame({
-        'Date': prediction_dates,
-        'Price': prediction_prices
-    })
-    
-    return final_predicted_price, df_prediction_path
+    while curr_date <= target_date:
+        if curr_date.weekday() < 5: # Trading days only
+            # Reshape for LSTM (1, 60, 5)
+            input_tensor = current_seq.reshape(1, LOOKBACK_PERIOD, len(TRAINING_FEATURES))
 
-# --- 4. MAIN METRICS DISPLAY ---
+            # Predict (Returns scaled price 0-1)
+            pred_scaled = model.predict(input_tensor, verbose=0)[0, 0]
 
-if not df_org.empty:
-    latest_price = df_org['Price'].iloc[-1]
-    latest_date_str = last_available_date.strftime('%Y-%m-%d')
-    mean_volume = df_org['Vol.'].mean() / 1_000_000 # Convert to millions
+            # Inverse Transform to get Naira
+            dummy = np.zeros((1, len(TRAINING_FEATURES)))
+            dummy[0, PRICE_IDX] = pred_scaled
+            pred_unscaled = local_scaler.inverse_transform(dummy)[0, PRICE_IDX]
 
-    col1, col2, col3 = st.columns(3)
+            # --- STABILITY CONSTRAINT ---
+            baseline = predictions[-1] if predictions else last_price
+            min_p = baseline * (1 - MAX_DAILY_CHANGE)
+            max_p = baseline * (1 + MAX_DAILY_CHANGE)
+            pred_constrained = np.clip(pred_unscaled, min_p, max_p)
+            if pred_constrained <= 0: pred_constrained = 0.01
 
-    with col1:
-        st.metric(f"Latest Close Price ({latest_date_str})", f"₦{latest_price:,.2f}")
-    with col2:
-        st.metric("Average Volume (Millions)", f"{mean_volume:,.2f}M")
-    with col3:
-        st.metric("Total Data Points", f"{len(df_org):,}")
-else:
-    st.stop()
+            # Store
+            predictions.append(pred_constrained)
+            dates.append(curr_date)
 
+            # Update Sequence
+            # We assume predicted price applies to all price features for the next step (stability)
+            next_step_unscaled = np.full((1, len(TRAINING_FEATURES)), pred_constrained)
+            # Important: Keep Change % as 0.0 (neutral assumption)
+            next_step_unscaled[0, TRAINING_FEATURES.index('Change %')] = 0.0
 
-# --- 5. PREDICTION SECTION ---
+            next_step_scaled = local_scaler.transform(next_step_unscaled)
+
+            # Shift sequence
+            current_seq = np.vstack([current_seq[1:], next_step_scaled])
+
+        curr_date += timedelta(days=1)
+
+    if not predictions: return None, None
+
+    df_pred = pd.DataFrame({'Date': dates, 'Price': predictions})
+    return predictions[-1], df_pred
+
+# --- 4. DISPLAY ---
+
+col1, col2 = st.columns(2)
+with col1:
+    st.metric("Latest Close", f"₦{df_org['Price'].iloc[-1]:,.2f}")
+    st.text(f"Date: {last_available_date.strftime('%Y-%m-%d')}")
+with col2:
+    st.metric("Volume (Avg)", f"{df_org['Vol.'].mean()/1e6:.2f}M")
+
 st.header(f"Forecast for {selected_org}")
 
-if st.button(f"Generate Multi-Step Forecast up to {prediction_date.strftime('%Y-%m-%d')}"):
-    
-    if prediction_date.date() <= last_available_date.date():
-        st.error("Please select a prediction date that is after the latest available data date.")
+if st.button("Generate Forecast"):
+    with st.spinner("Calculating..."):
+        final_price, df_path = predict_recursive(df_org, model, prediction_date)
+
+    if final_price is not None:
+        st.success(f"Forecast for {prediction_date.strftime('%Y-%m-%d')}: **₦{final_price:,.2f}**")
+
+        # Plot
+        fig, ax = plt.subplots(figsize=(10, 5))
+        ax.plot(df_org['Date'], df_org['Price'], label='Historical', color='gray')
+        ax.plot(df_path['Date'], df_path['Price'], label='Forecast', color='green', linestyle='--')
+        ax.scatter(df_path['Date'].iloc[-1], final_price, color='red', s=100)
+        ax.set_title(f"{selected_org} Price Projection")
+        ax.set_ylabel("Price (₦)")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        st.pyplot(fig)
+
+        # Data table
+        with st.expander("View Forecast Data"):
+            st.dataframe(df_path)
+
     else:
-        with st.spinner('Generating recursive forecast...'):
-            # Pass only the necessary arguments (removing global_scaler)
-            predicted_price, df_prediction_path = predict_recursive(df_org, model, LOOKBACK_PERIOD, prediction_date)
-        
-        if predicted_price is not None:
-            
-            # Store prediction path in session state to use in the visualization section (Section 6)
-            st.session_state['df_prediction_path'] = df_prediction_path
-            st.session_state['prediction_date'] = prediction_date
-            
-            st.success(f"**Predicted Closing Price for {selected_org} on {prediction_date.strftime('%Y-%m-%d')}:**")
-            st.balloons()
-            
-            # Display the main prediction
-            st.markdown(f"## ₦{predicted_price:,.2f}")
-            
-            # Comparison to latest price
-            change_pct = (predicted_price - latest_price) / latest_price * 100
-            st.markdown(f"*(Total change from previous close: **{change_pct:+.2f}%**)*")
-            
-            if change_pct > 0:
-                st.markdown("**(Predicted Trend: UP)**")
-            elif change_pct < 0:
-                st.markdown("**(Predicted Trend: DOWN)**")
-            else:
-                st.markdown("**(Predicted Trend: NEUTRAL)**")
-                
-        else:
-            st.warning(f"Not enough historical data for {selected_org} (Requires at least {LOOKBACK_PERIOD} days).")
-
-
-# --- 6. VISUALIZATION ---
-st.header("Historical Price Trend")
-
-# Create a figure for plotting
-fig, ax = plt.subplots(figsize=(10, 5))
-
-# Plot the historical closing price
-ax.plot(df_org['Date'], df_org['Price'], label='Actual Closing Price', color='#007A33', linewidth=2) # NSE Green
-ax.set_title(f'Historical Closing Price for {selected_org}', fontsize=16)
-ax.set_xlabel('Date', fontsize=12)
-ax.set_ylabel('Price (₦)', fontsize=12)
-ax.legend()
-ax.grid(True, linestyle=':', alpha=0.7)
-plt.xticks(rotation=45)
-plt.tight_layout()
-
-
-# Add the recursive prediction path to the chart if available in session state
-if 'df_prediction_path' in st.session_state and not st.session_state['df_prediction_path'].empty:
-    df_path = st.session_state['df_prediction_path']
-    final_predicted_price = df_path['Price'].iloc[-1]
-    
-    # 1. Plot the entire predicted path
-    ax.plot(df_path['Date'], df_path['Price'], label='Recursive Forecast', color='orange', linestyle='--', linewidth=1.5)
-    
-    # 2. Highlight the final prediction point
-    ax.scatter(df_path['Date'].iloc[-1], final_predicted_price, color='red', marker='*', s=200, label='Final Predicted Price')
-    
-    ax.legend()
-
-st.pyplot(fig) 
+        st.error("Insufficient data for forecasting.")
