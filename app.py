@@ -216,7 +216,7 @@ with st.sidebar:
 
     st.markdown("---")
     model_name = getattr(model, 'name', 'RNN Model')
-    st.success(f"**Engine:** ' LSTM '\n\n**Logic:** Local Scaling")
+    st.success(f"**Engine:** LSTM \n\n**Logic:** Local Scaling")
 
 # --- 5. RECURSIVE LOGIC ---
 
