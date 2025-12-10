@@ -23,7 +23,30 @@ st.set_page_config(layout="wide", page_title="Stock Price Prediction")
 # Custom CSS for a more attractive interface
 st.markdown("""
 <style>
-
+    .stApp {
+       
+    }
+    .main-header {
+        background-color:#B5E61D;
+        font-size: 2.5rem;
+        color: #007A33; /* NSE Green */
+        font-weight: 700;
+        text-align: center;
+        margin-bottom: 1rem;
+    }
+    .sub-header {
+        font-size: 1.2rem;
+        color: #555;
+        text-align: center;
+        margin-bottom: 2rem;
+    }
+    .metric-card {
+      
+        padding: 1rem;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
