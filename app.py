@@ -40,7 +40,7 @@ st.markdown("""
         margin-bottom: 2rem;
     }
     .metric-card {
-        background-color: white;
+        background-color: #B5E61D;
         padding: 1rem;
         border-radius: 10px;
         box-shadow: 0 4px 6px rgba(0,0,0,0.1);
