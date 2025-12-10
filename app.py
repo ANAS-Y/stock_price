@@ -13,7 +13,7 @@ from sklearn.preprocessing import MinMaxScaler
 
 # Define file paths
 MODEL_FILE = 'best_rnn_model.h5' # Loads the winner (LSTM or GRU)
-DATA_FILE = 'cleaned_nigerian_stock_data.csv'
+DATA_FILE = 'nigerian_stock_data.csv'
 LOOKBACK_PERIOD = 60
 TRAINING_FEATURES = ['Price', 'Open', 'High', 'Low', 'Change %']
 MAX_DAILY_CHANGE = 0.05
