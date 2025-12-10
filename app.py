@@ -31,7 +31,27 @@ def load_resources():
         df = pd.read_csv(DATA_FILE)
         df['Date'] = pd.to_datetime(df['Date'])
         
-        # Robust Cleaning
+        # --- FIX: Robust Volume Cleaning ---
+        # This handles cases where Volume might still be strings like "1.2M" or "500K"
+        if 'Vol.' in df.columns:
+            def clean_vol_helper(x):
+                if isinstance(x, (int, float)): return x
+                x = str(x).upper().replace(',', '').strip()
+                if x == '-' or x == 'NAN': return 0.0
+                if 'M' in x: return float(x.replace('M', '')) * 1_000_000
+                if 'K' in x: return float(x.replace('K', '')) * 1_000
+                if 'B' in x: return float(x.replace('B', '')) * 1_000_000_000
+                try: return float(x)
+                except: return 0.0
+            
+            # Apply cleaning only if it's not already numeric
+            if df['Vol.'].dtype == 'object':
+                df['Vol.'] = df['Vol.'].apply(clean_vol_helper)
+            
+            # Force to numeric
+            df['Vol.'] = pd.to_numeric(df['Vol.'], errors='coerce').fillna(0.0)
+
+        # Robust Cleaning for Training Features
         for col in TRAINING_FEATURES:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors='coerce').fillna(df[col].mean())
@@ -137,7 +157,9 @@ with col1:
     st.metric("Latest Close", f"₦{df_org['Price'].iloc[-1]:,.2f}")
     st.text(f"Date: {last_available_date.strftime('%Y-%m-%d')}")
 with col2:
-    st.metric("Volume (Avg)", f"{df_org['Vol.'].mean()/1e6:.2f}M")
+    # Ensure mean calculation is safe
+    avg_vol = df_org['Vol.'].mean()
+    st.metric("Volume (Avg)", f"{avg_vol/1e6:.2f}M")
 
 st.header(f"Forecast for {selected_org}")
 
