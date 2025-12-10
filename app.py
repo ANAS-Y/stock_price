@@ -18,11 +18,112 @@ LOOKBACK_PERIOD = 60
 TRAINING_FEATURES = ['Price', 'Open', 'High', 'Low', 'Change %']
 MAX_DAILY_CHANGE = 0.05 
 
-st.set_page_config(layout="wide", page_title="Stock Price Prediction")
+st.set_page_config(layout="wide", page_title="NSE Stock Predictor", page_icon="📈")
 
-# Custom CSS for a more attractive interface
+# --- 2. CUSTOM CSS FOR ENHANCED UI ---
 st.markdown("""
+<style>
+    /* Main Background with soft gradient */
+    .stApp {
+        background: linear-gradient(to bottom right, #f4f7f6, #e6ebf1);
+        color: #333333;
+    }
+    
+    /* Main Title Styling */
+    .main-header {
+        font-family: 'Helvetica Neue', sans-serif;
+        font-size: 3rem;
+        color: #006400; /* Dark Green */
+        font-weight: 800;
+        text-align: center;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-top: 1rem;
+        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+    }
+    
+    .sub-header {
+        font-size: 1.1rem;
+        color: #555;
+        text-align: center;
+        margin-bottom: 2.5rem;
+        font-style: italic;
+    }
 
+    /* Card Containers for Metrics */
+    div[data-testid="stMetric"] {
+        background-color: #ffffff;
+        border: 1px solid #e0e0e0;
+        padding: 20px;
+        border-radius: 15px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+        text-align: center;
+    }
+    
+    div[data-testid="stMetric"]:hover {
+        transform: translateY(-5px);
+        box-shadow: 0 8px 15px rgba(0,0,0,0.1);
+        border-color: #006400;
+    }
+    
+    /* Custom Metric Label Styling */
+    div[data-testid="stMetric"] label {
+        font-weight: bold;
+        color: #444;
+    }
+    
+    /* Custom Card for Trend Indicator */
+    .trend-card {
+        background-color: white;
+        border-radius: 15px;
+        padding: 20px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        border: 1px solid #e0e0e0;
+        text-align: center;
+        height: 100%;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+    }
+
+    /* Button Styling */
+    div.stButton > button {
+        background: linear-gradient(45deg, #007A33, #2E8B57);
+        color: white;
+        border: none;
+        padding: 0.6rem 2rem;
+        border-radius: 10px;
+        font-size: 1.1rem;
+        font-weight: bold;
+        box-shadow: 0 4px 10px rgba(0, 100, 0, 0.2);
+        width: 100%;
+        transition: all 0.3s ease;
+    }
+    
+    div.stButton > button:hover {
+        background: linear-gradient(45deg, #2E8B57, #007A33);
+        box-shadow: 0 6px 12px rgba(0, 100, 0, 0.3);
+        transform: scale(1.02);
+        color: #ffffff;
+    }
+
+    /* Sidebar Styling */
+    section[data-testid="stSidebar"] {
+        background-color: #ffffff;
+        border-right: 1px solid #eaeaea;
+    }
+    
+    /* Chart Container Styling */
+    .chart-container {
+        background-color: white;
+        padding: 20px;
+        border-radius: 15px;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.05);
+        margin-top: 20px;
+    }
+</style>
 """, unsafe_allow_html=True)
 
 @st.cache_resource
@@ -64,27 +165,30 @@ def load_resources():
 
 model, df_all = load_resources()
 
-# --- 2. SIDEBAR CONFIGURATION ---
+# --- 3. UI HEADER ---
 
-# Custom Header
-st.markdown('<div class="main-header">🇳🇬 NSE Stock Price Forecasting</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Powered by Recurrent Neural Network (RNN) Strategy</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🇳🇬 NSE Market Forecaster</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Advanced AI-Driven Stock Price Prediction System</div>', unsafe_allow_html=True)
 
 if df_all is None or model is None:
+    st.warning("Data or Model not found. Please verify deployment files.")
     st.stop()
 
+# --- 4. SIDEBAR ---
+
 with st.sidebar:
-    st.header("⚙️ Configuration")
+    st.image("https://upload.wikimedia.org/wikipedia/commons/thumb/e/e9/Nigerian_Stock_Exchange_logo.png/600px-Nigerian_Stock_Exchange_logo.png", width=100)
+    st.header("📊 Configuration")
+    
     organizations = df_all['Organisation'].unique()
     default_idx = int(np.where(organizations == 'NSE')[0][0]) if 'NSE' in organizations else 0
-    selected_org = st.selectbox("Select Ticker:", organizations, index=default_idx)
+    selected_org = st.selectbox("Select Ticker / Organization:", organizations, index=default_idx)
 
     df_org = df_all[df_all['Organisation'] == selected_org].sort_values('Date').copy()
     last_available_date = df_org['Date'].max()
 
-    st.markdown("---")
-    st.subheader("📅 Prediction Settings")
-
+    st.markdown("### 📅 Forecast Horizon")
+    
     min_date = last_available_date + pd.Timedelta(days=1)
     default_date = max(min_date.date(), datetime.now().date())
 
@@ -96,22 +200,20 @@ with st.sidebar:
     )
     prediction_date = pd.to_datetime(prediction_date)
 
-    # Model Info
+    st.markdown("---")
     model_name = getattr(model, 'name', 'RNN Model')
-    st.info(f"**Model:** {model_name}\n\n**Strategy:** Localized Scaling with Volatility Constraints")
+    st.success(f"**Engine:** {model_name}\n\n**Logic:** Local Scaling")
 
-# --- 3. RECURSIVE PREDICTION LOGIC ---
+# --- 5. RECURSIVE LOGIC ---
 
 def predict_recursive(org_data, model, target_date):
     if len(org_data) < LOOKBACK_PERIOD:
         return None, None
 
-    # 1. LOCAL SCALING
     local_scaler = MinMaxScaler(feature_range=(0, 1))
     data_values = org_data[TRAINING_FEATURES].values
     local_scaler.fit(data_values)
     
-    # 2. Initial Sequence
     last_60 = data_values[-LOOKBACK_PERIOD:]
     current_seq = local_scaler.transform(last_60)
     
@@ -131,7 +233,6 @@ def predict_recursive(org_data, model, target_date):
             dummy[0, PRICE_IDX] = pred_scaled
             pred_unscaled = local_scaler.inverse_transform(dummy)[0, PRICE_IDX]
             
-            # Stability Constraint
             baseline = predictions[-1] if predictions else last_price
             min_p = baseline * (1 - MAX_DAILY_CHANGE)
             max_p = baseline * (1 + MAX_DAILY_CHANGE)
@@ -141,7 +242,6 @@ def predict_recursive(org_data, model, target_date):
             predictions.append(pred_constrained)
             dates.append(curr_date)
             
-            # Update Sequence
             next_step_unscaled = np.full((1, len(TRAINING_FEATURES)), pred_constrained)
             next_step_unscaled[0, TRAINING_FEATURES.index('Change %')] = 0.0
             next_step_scaled = local_scaler.transform(next_step_unscaled)
@@ -154,86 +254,105 @@ def predict_recursive(org_data, model, target_date):
     df_pred = pd.DataFrame({'Date': dates, 'Price': predictions})
     return predictions[-1], df_pred
 
-# --- 4. DASHBOARD DISPLAY ---
+# --- 6. DASHBOARD BODY ---
 
-# Current Status Section
-st.subheader(f"📊 Market Status: {selected_org}")
-col1, col2, col3 = st.columns(3)
+# Market Overview Section
+st.markdown(f"### 🏢 Market Snapshot: {selected_org}")
 
 latest_close = df_org['Price'].iloc[-1]
 latest_date_str = last_available_date.strftime('%d %b, %Y')
 avg_vol = df_org['Vol.'].mean()
 
+col1, col2, col3 = st.columns(3)
+
 with col1:
-    st.metric(label="Last Close Price", value=f"₦{latest_close:,.2f}", delta=None)
-    st.caption(f"As of {latest_date_str}")
+    st.metric(label="📉 Last Close Price", value=f"₦{latest_close:,.2f}", delta=f"As of {latest_date_str}", delta_color="off")
 
 with col2:
-    st.metric(label="Average Volume", value=f"{avg_vol/1e6:.2f}M")
+    st.metric(label="📊 Average Volume", value=f"{avg_vol/1e6:.2f}M")
 
 with col3:
     total_data_points = len(df_org)
-    st.metric(label="Data Points", value=f"{total_data_points}")
+    st.metric(label="📅 Historical Data Points", value=f"{total_data_points}")
 
-# Forecast Section
-st.divider()
-st.subheader(f"📈 Forecast Analysis")
+st.markdown("<br>", unsafe_allow_html=True) # Spacer
 
-if st.button("Generate Forecast", type="primary", use_container_width=True):
-    with st.spinner(f"Running Advanced Analysis for {selected_org}..."):
+# Prediction Button Area
+if st.button("🚀 Run Prediction Analysis", type="primary"):
+    with st.spinner(f"Processing Market Data for {selected_org}..."):
         final_price, df_path = predict_recursive(df_org, model, prediction_date)
         
     if final_price is not None:
-        # --- NEW: Calculate Percentage Change ---
+        # Calculations
         price_change = final_price - latest_close
         percent_change = (price_change / latest_close) * 100
         
-        # Display Key Forecast Metrics
-        m_col1, m_col2 = st.columns(2)
+        st.markdown("---")
+        st.subheader("🔮 Forecast Results")
         
-        with m_col1:
+        # Result Cards
+        res_col1, res_col2 = st.columns([2, 1])
+        
+        with res_col1:
             st.metric(
-                label=f"Predicted Price ({prediction_date.strftime('%d %b, %Y')})", 
+                label=f"Projected Price ({prediction_date.strftime('%d %b, %Y')})", 
                 value=f"₦{final_price:,.2f}", 
-                delta=f"{price_change:,.2f} ({percent_change:+.2f}%)"
+                delta=f"{price_change:+,.2f} ({percent_change:+.2f}%)"
             )
         
-        with m_col2:
-            trend_icon = "↗️ UP" if percent_change > 0 else "↘️ DOWN"
-            color = "green" if percent_change > 0 else "red"
+        with res_col2:
+            trend_text = "BULLISH (UP)" if percent_change > 0 else "BEARISH (DOWN)"
+            trend_color = "#006400" if percent_change > 0 else "#8B0000"
+            icon = "📈" if percent_change > 0 else "📉"
+            
             st.markdown(f"""
-            <div class="metric-card">
-                <h3 style="color:{color}; margin:0;">{trend_icon}</h3>
-                <p style="margin:0;">Predicted Trend</p>
+            <div class="trend-card">
+                <div style="font-size: 2.5rem;">{icon}</div>
+                <div style="font-weight: bold; color: {trend_color}; font-size: 1.2rem; margin-top: 5px;">{trend_text}</div>
+                <div style="color: #666; font-size: 0.9rem;">Predicted Trend</div>
             </div>
             """, unsafe_allow_html=True)
 
-        # Enhanced Plotting
-        st.markdown("### Price Trajectory")
-        fig, ax = plt.subplots(figsize=(12, 6))
+        # Plotting Section
+        st.markdown("### 💹 Price Trajectory Analysis")
         
-        # Plot only last 365 days of history for clarity
-        history_plot = df_org.tail(365)
-        
-        ax.plot(history_plot['Date'], history_plot['Price'], label='Historical (Last 1 Year)', color='#555555', linewidth=1.5, alpha=0.7)
-        ax.plot(df_path['Date'], df_path['Price'], label='Forecast', color='#007A33', linewidth=2.5, linestyle='-') # NSE Green
-        
-        # Highlight End Point
-        ax.scatter(df_path['Date'].iloc[-1], final_price, color='#FF4B4B', s=150, zorder=5, edgecolors='white', linewidth=2)
-        
-        # Styling the Chart
-        ax.set_title(f"{selected_org} Price Projection", fontsize=14, fontweight='bold', pad=15)
-        ax.set_ylabel("Price (₦)", fontsize=12)
-        ax.grid(True, which='major', linestyle='--', alpha=0.4)
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.legend(loc='upper left', frameon=True)
-        
-        st.pyplot(fig)
+        # Create a container for the chart with white background
+        with st.container():
+            fig, ax = plt.subplots(figsize=(12, 6))
+            
+            # Plot Data (Last 365 Days + Forecast)
+            history_plot = df_org.tail(365)
+            
+            # Historical Line
+            ax.plot(history_plot['Date'], history_plot['Price'], label='Historical (1 Year)', color='#6c757d', linewidth=1.5, alpha=0.8)
+            # Forecast Line
+            ax.plot(df_path['Date'], df_path['Price'], label='AI Forecast', color='#007A33', linewidth=2.5)
+            
+            # End Point Marker
+            ax.scatter(df_path['Date'].iloc[-1], final_price, color='#dc3545', s=120, zorder=5, edgecolors='white', linewidth=2, label='Target Date')
+            
+            # Chart Styling
+            ax.set_title(f"{selected_org}: Historical vs Predicted Trend", fontsize=14, fontweight='bold', pad=20, color='#333')
+            ax.set_ylabel("Price (₦)", fontsize=12, fontweight='bold')
+            ax.set_xlabel("Timeline", fontsize=12, fontweight='bold')
+            
+            # Grid and Spines
+            ax.grid(True, which='major', linestyle='--', alpha=0.3, color='#bbb')
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            ax.spines['left'].set_linewidth(1.5)
+            ax.spines['bottom'].set_linewidth(1.5)
+            
+            ax.legend(loc='upper left', frameon=True, facecolor='white', framealpha=0.9, fontsize=10)
+            
+            # Add chart to Streamlit
+            st.pyplot(fig)
         
         # Data Table
-        with st.expander("View Detailed Forecast Data"):
-            st.dataframe(df_path.style.format({"Price": "₦{:,.2f}"}))
+        with st.expander("📄 View Detailed Forecast Data"):
+            st.dataframe(df_path.style.format({"Price": "₦{:,.2f}"}), use_container_width=True)
             
     else:
-        st.error("Insufficient data for forecasting.")
+        st.error("Insufficient historical data to generate a forecast.")
+else:
+    st.info("Select a target date and click 'Run Prediction Analysis' to see the future.")
