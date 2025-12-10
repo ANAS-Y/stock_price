@@ -20,66 +20,70 @@ MAX_DAILY_CHANGE = 0.05
 
 st.set_page_config(layout="wide", page_title="NSE Stock Predictor", page_icon="📈")
 
-# --- 2. CUSTOM CSS FOR ENHANCED UI ---
+# --- 2. CUSTOM CSS FOR DARK THEME UI ---
 st.markdown("""
 <style>
-    /* Main Background with soft gradient */
+    /* Main Background - Dark Financial Theme */
     .stApp {
-        background: linear-gradient(to bottom right, #f4f7f6, #e6ebf1);
-        color: #333333;
+        background: linear-gradient(to bottom right, #0f2027, #203a43, #2c5364); /* "203a43" is a dark slate green */
+        color: #ffffff;
     }
     
-    /* Main Title Styling */
+    /* Main Title Styling - Now White for Contrast */
     .main-header {
         font-family: 'Helvetica Neue', sans-serif;
         font-size: 3rem;
-        color: #006400; /* Dark Green */
+        color: #ffffff; 
         font-weight: 800;
         text-align: center;
         text-transform: uppercase;
         letter-spacing: 1px;
         margin-top: 1rem;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
+        text-shadow: 0px 0px 10px rgba(0,0,0,0.5);
     }
     
     .sub-header {
         font-size: 1.1rem;
-        color: #555;
+        color: #e0e0e0; /* Light Gray */
         text-align: center;
         margin-bottom: 2.5rem;
         font-style: italic;
     }
 
-    /* Card Containers for Metrics */
+    /* Card Containers for Metrics - White Cards on Dark Background */
     div[data-testid="stMetric"] {
         background-color: #ffffff;
-        border: 1px solid #e0e0e0;
+        border: none;
         padding: 20px;
         border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
+        box-shadow: 0 10px 20px rgba(0,0,0,0.3); /* Stronger shadow for depth */
         transition: transform 0.2s ease, box-shadow 0.2s ease;
         text-align: center;
+        color: #333; /* Text inside card remains dark */
     }
     
     div[data-testid="stMetric"]:hover {
         transform: translateY(-5px);
-        box-shadow: 0 8px 15px rgba(0,0,0,0.1);
-        border-color: #006400;
+        box-shadow: 0 15px 25px rgba(0,0,0,0.4);
+        border: 1px solid #007A33;
     }
     
-    /* Custom Metric Label Styling */
+    /* Force label colors inside metrics to be dark (since card is white) */
     div[data-testid="stMetric"] label {
+        color: #555555 !important;
         font-weight: bold;
-        color: #444;
     }
     
+    div[data-testid="stMetric"] div[data-testid="stMetricValue"] {
+        color: #000000 !important;
+    }
+
     /* Custom Card for Trend Indicator */
     .trend-card {
         background-color: white;
         border-radius: 15px;
         padding: 20px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-        border: 1px solid #e0e0e0;
+        box-shadow: 0 10px 20px rgba(0,0,0,0.3);
         text-align: center;
         height: 100%;
         display: flex;
@@ -90,31 +94,36 @@ st.markdown("""
 
     /* Button Styling */
     div.stButton > button {
-        background: linear-gradient(45deg, #007A33, #2E8B57);
+        background: linear-gradient(45deg, #00b09b, #96c93d); /* Brighter Green Gradient */
         color: white;
         border: none;
-        padding: 0.6rem 2rem;
+        padding: 0.7rem 2rem;
         border-radius: 10px;
-        font-size: 1.1rem;
+        font-size: 1.2rem;
         font-weight: bold;
-        box-shadow: 0 4px 10px rgba(0, 100, 0, 0.2);
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
         width: 100%;
         transition: all 0.3s ease;
     }
     
     div.stButton > button:hover {
-        background: linear-gradient(45deg, #2E8B57, #007A33);
-        box-shadow: 0 6px 12px rgba(0, 100, 0, 0.3);
+        background: linear-gradient(45deg, #96c93d, #00b09b);
+        box-shadow: 0 6px 20px rgba(0, 255, 100, 0.4); /* Glowing effect */
         transform: scale(1.02);
         color: #ffffff;
     }
 
     /* Sidebar Styling */
     section[data-testid="stSidebar"] {
-        background-color: #ffffff;
+        background-color: #f8f9fa; /* Keep sidebar light for contrast */
         border-right: 1px solid #eaeaea;
     }
     
+    /* Sidebar Text Fix */
+    section[data-testid="stSidebar"] * {
+        color: #333333;
+    }
+
     /* Chart Container Styling */
     .chart-container {
         background-color: white;
@@ -122,6 +131,11 @@ st.markdown("""
         border-radius: 15px;
         box-shadow: 0 4px 10px rgba(0,0,0,0.05);
         margin-top: 20px;
+    }
+    
+    /* Divider Line Color */
+    hr {
+        border-color: #555;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -210,10 +224,12 @@ def predict_recursive(org_data, model, target_date):
     if len(org_data) < LOOKBACK_PERIOD:
         return None, None
 
+    # 1. LOCAL SCALING
     local_scaler = MinMaxScaler(feature_range=(0, 1))
     data_values = org_data[TRAINING_FEATURES].values
     local_scaler.fit(data_values)
     
+    # 2. Initial Sequence
     last_60 = data_values[-LOOKBACK_PERIOD:]
     current_seq = local_scaler.transform(last_60)
     
@@ -266,14 +282,14 @@ avg_vol = df_org['Vol.'].mean()
 col1, col2, col3 = st.columns(3)
 
 with col1:
-    st.metric(label="📉 Last Close Price", value=f"₦{latest_close:,.2f}", delta=f"As of {latest_date_str}", delta_color="off")
+    st.metric(label="Last Close Price", value=f"₦{latest_close:,.2f}", delta=f"As of {latest_date_str}", delta_color="off")
 
 with col2:
-    st.metric(label="📊 Average Volume", value=f"{avg_vol/1e6:.2f}M")
+    st.metric(label="Average Volume", value=f"{avg_vol/1e6:.2f}M")
 
 with col3:
     total_data_points = len(df_org)
-    st.metric(label="📅 Historical Data Points", value=f"{total_data_points}")
+    st.metric(label="Historical Data Points", value=f"{total_data_points}")
 
 st.markdown("<br>", unsafe_allow_html=True) # Spacer
 
