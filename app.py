@@ -181,8 +181,8 @@ model, df_all = load_resources()
 
 # --- 3. UI HEADER ---
 
-st.markdown('<div class="main-header">🇳🇬 NSE Market Forecaster</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-header">Advanced AI-Driven Stock Price Prediction System</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-header">🇳🇬 Stock Price Forecasting (GRU RNN)</div>', unsafe_allow_html=True)
+st.markdown('<div class="sub-header">Stock Price Prediction using GRU RNN</div>', unsafe_allow_html=True)
 
 if df_all is None or model is None:
     st.warning("Data or Model not found. Please verify deployment files.")
