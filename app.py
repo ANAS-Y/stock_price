@@ -46,7 +46,7 @@ model, df_all = load_resources()
 # --- 2. SIDEBAR CONFIGURATION ---
 
 st.title("🇳🇬 NSE Stock Price Forecasting")
-st.caption("Powered by LSTM Neural Network (Augmented Data)")
+st.caption("Powered by LSTM Neural Network")
 
 if df_all is None or model is None:
     st.stop()
