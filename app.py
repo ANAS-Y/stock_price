@@ -24,7 +24,7 @@ st.set_page_config(layout="wide", page_title="Stock Price Prediction")
 st.markdown("""
 <style>
     .stApp {
-        background-color:blue;
+        background-color:#B5E61D;
     }
     .main-header {
         font-size: 2.5rem;
